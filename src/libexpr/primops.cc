@@ -33,6 +33,7 @@
 #  include <dlfcn.h>
 #endif
 
+
 #include <cmath>
 
 namespace nix {
@@ -4861,6 +4862,7 @@ static RegisterPrimOp primop_replaceStrings({
     )",
     .fun = prim_replaceStrings,
 });
+
 
 /*************************************************************
  * Versions
