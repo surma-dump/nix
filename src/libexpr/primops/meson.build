@@ -4,7 +4,6 @@ generated_headers += gen_header.process(
 )
 
 sources += files(
-  'add2.cc',
   'context.cc',
   'fetchClosure.cc',
   'fetchMercurial.cc',

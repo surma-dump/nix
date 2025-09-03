@@ -15,7 +15,7 @@ let
 in
 
 let
-  inherit (pkgs) lib;
+  inherit (pkgs) lib callPackage;
 
   stdenv = if prevStdenv.isDarwin && prevStdenv.isx86_64 then darwinStdenv else prevStdenv;
 
@@ -86,37 +86,7 @@ scope: {
     };
   };
 
-  wamr = pkgs.stdenv.mkDerivation rec {
-    pname = "wamr";
-    version = "1.2.2";
-
-    src = pkgs.fetchFromGitHub {
-      owner = "bytecodealliance";
-      repo = "wasm-micro-runtime";
-      rev = "f69ff7058783bc5dcaaa81c9d6c88c0d534881fc";
-      # TODO: fill in the correct sha256 hash.
-      # I am using a placeholder as I cannot compute it myself.
-      sha256 = "0000000000000000000000000000000000000000000000000000";
-    };
-
-    sourceRoot = "${src.name}/product-mini";
-
-    nativeBuildInputs = [ pkgs.cmake ];
-
-    cmakeFlags = [
-      "-DWAMR_BUILD_PLATFORM=linux"
-      "-DWAMR_BUILD_TARGET=X86_64"
-      "-DWAMR_BUILD_INTERP=1"
-      "-DWAMR_BUILD_FAST_INTERP=1"
-      "-DWAMR_BUILD_AOT=0" # Disable AOT for now to keep it simple
-      "-DWAMR_BUILD_LIBC_BUILTIN=1"
-      "-DWAMR_BUILD_LIBC_WASI=0" # Disable WASI for now
-      "-DWAMR_BUILD_SIMD=0" # Disable SIMD for now
-    ];
-
-    # The wamr build system doesn't have a 'check' phase, so we disable it.
-    doCheck = false;
-  };
+  wamr = callPackage (import ../wamr.nix) {};
 
   # TODO Hack until https://github.com/NixOS/nixpkgs/issues/45462 is fixed.
   boost =
