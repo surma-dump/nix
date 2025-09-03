@@ -79,6 +79,9 @@ configdata_priv.set(
 
 deps_other += toml11
 
+iwasm = dependency('iwasm', modules : ['iwasm::vmlib'], method : 'cmake', include_type : 'system')
+deps_other += iwasm
+
 config_priv_h = configure_file(
   configuration : configdata_priv,
   output : 'expr-config-private.hh',

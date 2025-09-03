@@ -15,7 +15,7 @@ let
 in
 
 let
-  inherit (pkgs) lib;
+  inherit (pkgs) lib callPackage;
 
   stdenv = if prevStdenv.isDarwin && prevStdenv.isx86_64 then darwinStdenv else prevStdenv;
 
@@ -85,6 +85,8 @@ scope: {
       hash = "sha256-sgWKYxNT22nw376ttGsTdg0AMzOwp8QH3E8mx0BZJTQ=";
     };
   };
+
+  wamr = callPackage (import ../wamr.nix) {};
 
   # TODO Hack until https://github.com/NixOS/nixpkgs/issues/45462 is fixed.
   boost =

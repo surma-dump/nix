@@ -33,6 +33,8 @@
 #  include <dlfcn.h>
 #endif
 
+#include <wasm_export.h>
+
 #include <cmath>
 
 namespace nix {
@@ -4861,6 +4863,92 @@ static RegisterPrimOp primop_replaceStrings({
     )",
     .fun = prim_replaceStrings,
 });
+
+/*************************************************************
+ * WebAssembly
+ *************************************************************/
+
+static void prim_loadWasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
+{
+    auto path = realisePath(state, pos, *args[0]);
+    auto wasmBytes = path.readFile();
+
+    char error_buf[128];
+    wasm_module_t module;
+    wasm_module_inst_t module_inst;
+    wasm_function_inst_t func;
+    wasm_exec_env_t exec_env;
+    uint32_t stack_size = 8092, heap_size = 8092;
+
+    if (!wasm_runtime_init()) {
+        state.error<EvalError>("failed to initialize wasm runtime").atPos(pos).debugThrow();
+    }
+
+    module = wasm_runtime_load((uint8_t*)wasmBytes.data(), wasmBytes.size(), error_buf, sizeof(error_buf));
+    if (!module) {
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to load wasm module: %s", error_buf).atPos(pos).debugThrow();
+    }
+
+    module_inst = wasm_runtime_instantiate(module, stack_size, heap_size, error_buf, sizeof(error_buf));
+    if (!module_inst) {
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to instantiate wasm module: %s", error_buf).atPos(pos).debugThrow();
+    }
+
+    exec_env = wasm_runtime_create_exec_env(module_inst, stack_size);
+    if (!exec_env) {
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to create wasm execution environment").atPos(pos).debugThrow();
+    }
+
+    func = wasm_runtime_lookup_function(module_inst, "main");
+    if (!func) {
+        func = wasm_runtime_lookup_function(module_inst, "_start");
+    }
+
+    if (!func) {
+        wasm_runtime_destroy_exec_env(exec_env);
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to find 'main' or '_start' function in wasm module").atPos(pos).debugThrow();
+    }
+
+    uint32_t argv[1] = { 0 };
+    if (!wasm_runtime_call_wasm(exec_env, func, 1, argv)) {
+        std::string exception(wasm_runtime_get_exception(module_inst));
+        wasm_runtime_destroy_exec_env(exec_env);
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to call wasm function: %s", exception).atPos(pos).debugThrow();
+    }
+
+    // Get the return value from argv[0]
+    int32_t result = (int32_t)argv[0];
+
+    wasm_runtime_destroy_exec_env(exec_env);
+    wasm_runtime_deinstantiate(module_inst);
+    wasm_runtime_unload(module);
+    wasm_runtime_destroy();
+
+    v.mkInt(result);
+}
+
+static RegisterPrimOp primop_loadWasm({
+    .name = "loadWasm",
+    .args = {"path"},
+    .doc = R"(
+      Load a WebAssembly module from the given path, and execute its `main` or `_start` function.
+      Returns the integer value returned by the function.
+    )",
+    .fun = prim_loadWasm,
+});
+
 
 /*************************************************************
  * Versions
