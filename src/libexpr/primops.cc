@@ -33,7 +33,7 @@
 #  include <dlfcn.h>
 #endif
 
-#include <wasm3.h>
+#include <wasm_export.h>
 
 #include <cmath>
 
@@ -4873,63 +4873,65 @@ static void prim_loadWasm(EvalState & state, const PosIdx pos, Value ** args, Va
     auto path = realisePath(state, pos, *args[0]);
     auto wasmBytes = path.readFile();
 
-    IM3Environment env = m3_NewEnvironment();
-    if (!env) {
-        state.error<EvalError>("failed to create wasm3 environment").atPos(pos).debugThrow();
+    char error_buf[128];
+    wasm_module_t module;
+    wasm_module_inst_t module_inst;
+    wasm_function_inst_t func;
+    wasm_exec_env_t exec_env;
+    uint32_t stack_size = 8092, heap_size = 8092;
+
+    if (!wasm_runtime_init()) {
+        state.error<EvalError>("failed to initialize wasm runtime").atPos(pos).debugThrow();
     }
 
-    IM3Runtime runtime = m3_NewRuntime(env, 1024 * 64, nullptr); // 64K stack
-    if (!runtime) {
-        m3_FreeEnvironment(env);
-        state.error<EvalError>("failed to create wasm3 runtime").atPos(pos).debugThrow();
+    module = wasm_runtime_load((uint8_t*)wasmBytes.data(), wasmBytes.size(), error_buf, sizeof(error_buf));
+    if (!module) {
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to load wasm module: %s", error_buf).atPos(pos).debugThrow();
     }
 
-    IM3Module module = nullptr;
-    M3Result result = m3_ParseModule(env, &module, (const uint8_t *)wasmBytes.data(), wasmBytes.size());
-    if (result) {
-        m3_FreeRuntime(runtime);
-        m3_FreeEnvironment(env);
-        state.error<EvalError>("failed to parse wasm module: %s", result).atPos(pos).debugThrow();
+    module_inst = wasm_runtime_instantiate(module, stack_size, heap_size, error_buf, sizeof(error_buf));
+    if (!module_inst) {
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to instantiate wasm module: %s", error_buf).atPos(pos).debugThrow();
     }
 
-    result = m3_LoadModule(runtime, module);
-    if (result) {
-        m3_FreeModule(module);
-        m3_FreeRuntime(runtime);
-        m3_FreeEnvironment(env);
-        state.error<EvalError>("failed to load wasm module: %s", result).atPos(pos).debugThrow();
+    exec_env = wasm_runtime_create_exec_env(module_inst, stack_size);
+    if (!exec_env) {
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to create wasm execution environment").atPos(pos).debugThrow();
     }
 
-    IM3Function main_func = nullptr;
-    result = m3_FindFunction(&main_func, runtime, "main");
-    if (result) {
-        // Fallback to _start for WASI compatibility
-        result = m3_FindFunction(&main_func, runtime, "_start");
+    func = wasm_runtime_lookup_function(module_inst, "main", NULL);
+    if (!func) {
+        func = wasm_runtime_lookup_function(module_inst, "_start", NULL);
     }
 
-    if (result) {
-        m3_FreeRuntime(runtime);
-        m3_FreeEnvironment(env);
-        state.error<EvalError>("failed to find 'main' or '_start' function in wasm module: %s", result).atPos(pos).debugThrow();
+    if (!func) {
+        wasm_runtime_destroy_exec_env(exec_env);
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to find 'main' or '_start' function in wasm module").atPos(pos).debugThrow();
     }
 
-    result = m3_Call(main_func, 0, nullptr);
-    if (result) {
-        M3ErrorInfo info;
-        m3_GetErrorInfo(runtime, &info);
-        if (info.result) {
-             m3_FreeRuntime(runtime);
-             m3_FreeEnvironment(env);
-             state.error<EvalError>("wasm trap: %s", info.message).atPos(pos).debugThrow();
-        } else {
-             m3_FreeRuntime(runtime);
-             m3_FreeEnvironment(env);
-             state.error<EvalError>("failed to call function: %s", result).atPos(pos).debugThrow();
-        }
+    uint32_t argv[1] = { 0 };
+    if (!wasm_runtime_call_wasm(exec_env, func, 0, argv)) {
+        std::string exception(wasm_runtime_get_exception(module_inst));
+        wasm_runtime_destroy_exec_env(exec_env);
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to call wasm function: %s", exception).atPos(pos).debugThrow();
     }
 
-    m3_FreeRuntime(runtime);
-    m3_FreeEnvironment(env);
+    wasm_runtime_destroy_exec_env(exec_env);
+    wasm_runtime_deinstantiate(module_inst);
+    wasm_runtime_unload(module);
+    wasm_runtime_destroy();
 
     v.mkNull();
 }
