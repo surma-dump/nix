@@ -86,6 +86,25 @@ scope: {
     };
   };
 
+  wasm3 = pkgs.stdenv.mkDerivation rec {
+    pname = "wasm3";
+    version = "0.5.0";
+
+    src = pkgs.fetchFromGitHub {
+      owner = "wasm3";
+      repo = "wasm3";
+      rev = "6b8bcb1e07bf26ebef09a7211b0a37a446eafd52";
+      # TODO: fill in the correct sha256 hash.
+      # I am using a placeholder as I cannot compute it myself.
+      sha256 = "0000000000000000000000000000000000000000000000000000";
+    };
+
+    nativeBuildInputs = [ pkgs.cmake ];
+
+    # The wasm3 build system doesn't have a 'check' phase, so we disable it.
+    doCheck = false;
+  };
+
   # TODO Hack until https://github.com/NixOS/nixpkgs/issues/45462 is fixed.
   boost =
     (pkgs.boost.override {
