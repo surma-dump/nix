@@ -4905,9 +4905,9 @@ static void prim_loadWasm(EvalState & state, const PosIdx pos, Value ** args, Va
         state.error<EvalError>("failed to create wasm execution environment").atPos(pos).debugThrow();
     }
 
-    func = wasm_runtime_lookup_function(module_inst, "main", NULL);
+    func = wasm_runtime_lookup_function(module_inst, "main");
     if (!func) {
-        func = wasm_runtime_lookup_function(module_inst, "_start", NULL);
+        func = wasm_runtime_lookup_function(module_inst, "_start");
     }
 
     if (!func) {
@@ -4919,7 +4919,7 @@ static void prim_loadWasm(EvalState & state, const PosIdx pos, Value ** args, Va
     }
 
     uint32_t argv[1] = { 0 };
-    if (!wasm_runtime_call_wasm(exec_env, func, 0, argv)) {
+    if (!wasm_runtime_call_wasm(exec_env, func, 1, argv)) {
         std::string exception(wasm_runtime_get_exception(module_inst));
         wasm_runtime_destroy_exec_env(exec_env);
         wasm_runtime_deinstantiate(module_inst);
@@ -4928,12 +4928,15 @@ static void prim_loadWasm(EvalState & state, const PosIdx pos, Value ** args, Va
         state.error<EvalError>("failed to call wasm function: %s", exception).atPos(pos).debugThrow();
     }
 
+    // Get the return value from argv[0]
+    int32_t result = (int32_t)argv[0];
+
     wasm_runtime_destroy_exec_env(exec_env);
     wasm_runtime_deinstantiate(module_inst);
     wasm_runtime_unload(module);
     wasm_runtime_destroy();
 
-    v.mkNull();
+    v.mkInt(result);
 }
 
 static RegisterPrimOp primop_loadWasm({
@@ -4941,6 +4944,7 @@ static RegisterPrimOp primop_loadWasm({
     .args = {"path"},
     .doc = R"(
       Load a WebAssembly module from the given path, and execute its `main` or `_start` function.
+      Returns the integer value returned by the function.
     )",
     .fun = prim_loadWasm,
 });
