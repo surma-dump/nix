@@ -9,5 +9,5 @@ sources += files(
   'fetchMercurial.cc',
   'fetchTree.cc',
   'fromTOML.cc',
-  'loadWasm.cc',
+  'runWasm.cc',
 )
