@@ -4871,6 +4871,7 @@ static RegisterPrimOp primop_replaceStrings({
 static void prim_loadWasm(EvalState & state, const PosIdx pos, Value ** args, Value & v)
 {
     auto path = realisePath(state, pos, *args[0]);
+    auto funcName = state.forceStringNoCtx(*args[1], pos, "while evaluating the function name passed to builtins.loadWasm");
     auto wasmBytes = path.readFile();
 
     char error_buf[128];
@@ -4905,17 +4906,14 @@ static void prim_loadWasm(EvalState & state, const PosIdx pos, Value ** args, Va
         state.error<EvalError>("failed to create wasm execution environment").atPos(pos).debugThrow();
     }
 
-    func = wasm_runtime_lookup_function(module_inst, "main");
-    if (!func) {
-        func = wasm_runtime_lookup_function(module_inst, "_start");
-    }
-
+    func = wasm_runtime_lookup_function(module_inst, std::string(funcName).c_str());
+    
     if (!func) {
         wasm_runtime_destroy_exec_env(exec_env);
         wasm_runtime_deinstantiate(module_inst);
         wasm_runtime_unload(module);
         wasm_runtime_destroy();
-        state.error<EvalError>("failed to find 'main' or '_start' function in wasm module").atPos(pos).debugThrow();
+        state.error<EvalError>("failed to find function '%s' in wasm module", funcName).atPos(pos).debugThrow();
     }
 
     uint32_t argv[1] = { 0 };
@@ -4941,10 +4939,12 @@ static void prim_loadWasm(EvalState & state, const PosIdx pos, Value ** args, Va
 
 static RegisterPrimOp primop_loadWasm({
     .name = "loadWasm",
-    .args = {"path"},
+    .args = {"path", "functionName"},
     .doc = R"(
-      Load a WebAssembly module from the given path, and execute its `main` or `_start` function.
+      Load a WebAssembly module from the given path, and execute the specified function.
       Returns the integer value returned by the function.
+      
+      Example: builtins.loadWasm ./module.wasm "add"
     )",
     .fun = prim_loadWasm,
 });
