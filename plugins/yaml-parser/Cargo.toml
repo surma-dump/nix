@@ -1,0 +1,12 @@
+[package]
+name = "yaml-parser"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0.99"
+serde_json = "1.0.143"
+serde_yml = "0.0.12"
