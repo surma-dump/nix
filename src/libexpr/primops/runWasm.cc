@@ -77,27 +77,52 @@ static void prim_runWasm(EvalState & state, const PosIdx pos, Value ** args, Val
         state.error<EvalError>("failed to find function '%s' in wasm module", funcName).atPos(pos).debugThrow();
     }
 
+    // Look up the _malloc function
+    wasm_function_inst_t malloc_func = wasm_runtime_lookup_function(module_inst, "_malloc");
+    if (!malloc_func) {
+        wasm_runtime_destroy_exec_env(exec_env);
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to find '_malloc' function in wasm module").atPos(pos).debugThrow();
+    }
+
     // Allocate memory in WASM for the JSON string
-    uint32_t json_len = jsonInput.length();
-    // uint32_t json_ptr = wasm_runtime_module_malloc(module_inst, json_len + 1, NULL);
-    // if (!json_ptr) {
-    //     wasm_runtime_destroy_exec_env(exec_env);
-    //     wasm_runtime_deinstantiate(module_inst);
-    //     wasm_runtime_unload(module);
-    //     wasm_runtime_destroy();
-    //     state.error<EvalError>("failed to allocate memory in wasm module").atPos(pos).debugThrow();
-    // }
+    uint32_t json_len = jsonInput.length() + 1; // +1 for null terminator
+    uint32_t malloc_argv[1] = { json_len };
+    if (!wasm_runtime_call_wasm(exec_env, malloc_func, 1, malloc_argv)) {
+        std::string exception(wasm_runtime_get_exception(module_inst));
+        wasm_runtime_destroy_exec_env(exec_env);
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to call _malloc: %s", exception).atPos(pos).debugThrow();
+    }
+    
+    uint32_t json_ptr = malloc_argv[0];
+    if (!json_ptr) {
+        wasm_runtime_destroy_exec_env(exec_env);
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("_malloc returned null pointer").atPos(pos).debugThrow();
+    }
 
     // Copy JSON string to WASM memory
-    // void* json_addr = wasm_runtime_addr_app_to_native(module_inst, json_ptr);
-    // memcpy(json_addr, jsonInput.c_str(), json_len + 1);
+    void* json_addr = wasm_runtime_addr_app_to_native(module_inst, json_ptr);
+    if (!json_addr) {
+        wasm_runtime_destroy_exec_env(exec_env);
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to convert WASM pointer to native address").atPos(pos).debugThrow();
+    }
+    memcpy(json_addr, jsonInput.c_str(), json_len);
 
-    // Call the function with pointer and length
-    // uint32_t argv[2] = { json_ptr, json_len };
-    uint32_t argv[1] = { json_len };
+    // Call the function with the pointer to the JSON string
+    uint32_t argv[1] = { json_ptr };
     if (!wasm_runtime_call_wasm(exec_env, func, 1, argv)) {
         std::string exception(wasm_runtime_get_exception(module_inst));
-        // wasm_runtime_module_free(module_inst, json_ptr);
         wasm_runtime_destroy_exec_env(exec_env);
         wasm_runtime_deinstantiate(module_inst);
         wasm_runtime_unload(module);
@@ -105,12 +130,27 @@ static void prim_runWasm(EvalState & state, const PosIdx pos, Value ** args, Val
         state.error<EvalError>("failed to call wasm function: %s", exception).atPos(pos).debugThrow();
     }
 
-    // The function should have modified the JSON string in place
-    // Read the result back
-    // std::string jsonOutput((char*)json_addr, json_len);
+    // The function returns a pointer to a new null-terminated JSON string
+    uint32_t result_ptr = argv[0];
+    if (!result_ptr) {
+        wasm_runtime_destroy_exec_env(exec_env);
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("wasm function returned null pointer").atPos(pos).debugThrow();
+    }
     
-    // Free the allocated memory
-    // wasm_runtime_module_free(module_inst, json_ptr);
+    void* result_addr = wasm_runtime_addr_app_to_native(module_inst, result_ptr);
+    if (!result_addr) {
+        wasm_runtime_destroy_exec_env(exec_env);
+        wasm_runtime_deinstantiate(module_inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        state.error<EvalError>("failed to convert result pointer to native address").atPos(pos).debugThrow();
+    }
+    
+    // Read the null-terminated result string
+    std::string jsonOutput((char*)result_addr);
 
     wasm_runtime_destroy_exec_env(exec_env);
     wasm_runtime_deinstantiate(module_inst);
@@ -119,7 +159,7 @@ static void prim_runWasm(EvalState & state, const PosIdx pos, Value ** args, Val
 
     // Parse the JSON result back into a Nix value
     try {
-        parseJSON(state, jsonInput, v);
+        parseJSON(state, jsonOutput, v);
     } catch (JSONParseError & e) {
         state.error<EvalError>("failed to parse JSON output from wasm function: %s", e.what()).atPos(pos).debugThrow();
     }
@@ -132,9 +172,11 @@ static RegisterPrimOp primop_runWasm({
       Load a WebAssembly module from the given path, and execute the specified function
       with the given input value converted to JSON.
       
-      The input value is converted to JSON and passed to the WASM function as a pointer
-      and length. The function can modify the JSON string in place. The resulting JSON
-      is parsed back into a Nix value and returned.
+      The WASM module must export a '_malloc' function that takes a size parameter and
+      returns a pointer to allocated memory. The input value is converted to JSON and
+      copied into WASM memory allocated via '_malloc'. The specified function is called
+      with a pointer to this JSON string. The function should return a pointer to a new
+      null-terminated JSON string, which is parsed back into a Nix value and returned.
       
       Example: builtins.runWasm ./module.wasm "transform" { foo = "bar"; num = 42; }
     )",
